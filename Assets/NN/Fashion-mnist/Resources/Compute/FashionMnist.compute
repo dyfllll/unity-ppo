@@ -1,0 +1,61 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel TransformRawToInput
+#pragma kernel TransformRawToOutput
+
+
+// 定义线程组大小
+#define THREAD_GROUP_SIZE_X 8
+#define THREAD_GROUP_SIZE_Y 8
+#define THREAD_GROUP_SIZE 64
+
+
+
+
+RWStructuredBuffer<float> targetBuffer;
+
+uint inputCount;
+uint batch;
+
+const static float PI = 3.14159274;
+
+
+ByteAddressBuffer rawBuffer;
+uint rawLineSize;
+uint rawOffset;
+
+ 
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void TransformRawToInput(uint3 id : SV_DispatchThreadID)
+{
+    uint x = id.x;
+    uint y = id.y;
+    if (x < inputCount && y < batch)
+    {
+        uint index = y * rawLineSize + rawOffset + x;
+        uint indexStart = index >> 2;
+        uint indexOffset = index - (indexStart << 2);
+        uint value = rawBuffer.Load(indexStart << 2);
+        value = (value >> indexOffset * 8) & 0xff;
+        targetBuffer[y * inputCount + x] = value;
+    }
+}
+
+[numthreads(1, THREAD_GROUP_SIZE_Y, 1)]
+void TransformRawToOutput(uint3 id : SV_DispatchThreadID)
+{
+    uint y = id.y;
+    if (y < batch)
+    {
+        uint index = y * rawLineSize + rawOffset;
+        uint indexStart = index >> 2;
+        uint indexOffset = index - (indexStart << 2);
+        uint value = rawBuffer.Load(indexStart << 2);
+        value = (value >> indexOffset * 8) & 0xff;
+        
+        for (uint i = 0; i < inputCount; i++)
+        {
+            targetBuffer[y * inputCount + i] = i == value ? 1 : 0;
+        }
+    }
+}

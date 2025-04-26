@@ -1,0 +1,86 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel SquareSum
+#pragma kernel ComputeClipCoef
+#pragma kernel ApplyClipCoef
+#define THREADS_PER_GROUP 256
+
+#pragma multi_compile_local __ DISPATCH_BEGIN
+#pragma multi_compile_local __ DISPATCH_END
+
+
+StructuredBuffer<float> inputBuffer;
+RWStructuredBuffer<float> outputBuffer;
+uint outputOffset;
+
+uint maxCount;
+float maxNorm;
+
+groupshared float sharedMemory[THREADS_PER_GROUP];
+
+
+
+
+float GetSquareItem(uint index)
+{
+#if DISPATCH_BEGIN
+    return inputBuffer[index] * inputBuffer[index];
+#else
+    return inputBuffer[index];
+#endif    
+}
+
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+void SquareSum(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    uint localIndex = groupThreadId.x;
+    
+    uint index = groupId.x * THREADS_PER_GROUP * 2 + localIndex;
+    sharedMemory[localIndex] = index < maxCount ? GetSquareItem(index) : 0;
+    sharedMemory[localIndex] += (index + THREADS_PER_GROUP) < maxCount ? GetSquareItem(index + THREADS_PER_GROUP) : 0.0f;
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint stride = THREADS_PER_GROUP / 2; stride > 0; stride /= 2)
+    {
+        if (localIndex < stride)
+        {
+            sharedMemory[localIndex] += sharedMemory[localIndex + stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    
+    if (localIndex == 0)
+    {
+
+#if DISPATCH_END
+        outputBuffer[groupId.x + outputOffset] = sqrt(sharedMemory[0]);
+#else
+        outputBuffer[groupId.x] = sharedMemory[0];
+#endif
+    }
+}
+
+
+
+[numthreads(1, 1, 1)]
+void ComputeClipCoef(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    float sum = 0;
+    for (uint i = 0; i < maxCount; ++i)
+    {
+        sum += outputBuffer[i] * outputBuffer[i];
+    }
+    float total_norm = sqrt(sum);
+    float clip_coef = maxNorm / (total_norm + 1e-6);
+    float clip_coef_clamped = min(clip_coef, 1.0);
+    outputBuffer[0] = clip_coef_clamped;
+}
+
+
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+void ApplyClipCoef(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    if (id.x < maxCount)
+    {
+        outputBuffer[id.x] *= inputBuffer[0];
+    }
+}

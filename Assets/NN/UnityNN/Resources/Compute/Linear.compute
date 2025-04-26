@@ -1,0 +1,104 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel Forward 
+#pragma kernel ComputeGrads
+#pragma kernel Backward
+
+
+// 定义线程组大小
+#define THREAD_GROUP_SIZE_X 8
+#define THREAD_GROUP_SIZE_Y 8
+#define THREAD_GROUP_SIZE 64
+
+
+StructuredBuffer<float> inputBuffer;
+StructuredBuffer<float> weightBuffer;
+StructuredBuffer<float> biasBuffer;
+RWStructuredBuffer<float> outputBuffer;
+
+StructuredBuffer<float> dOutputBuffer;
+RWStructuredBuffer<float> dInputBuffer;
+RWStructuredBuffer<float> dWeightBuffer; //权重变化矩阵
+RWStructuredBuffer<float> dBiasBuffer; //偏置变化矩阵
+
+int batch; // 输入批数
+float batchInv;
+int outputCount; // 输出神经元个数
+int inputCount; // 输入神经元个数
+
+// 前向传播
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void Forward(uint3 id : SV_DispatchThreadID)
+{
+    int y = id.y;
+    int x = id.x;
+
+    // 确保计算在线程组边界内
+    if (x < outputCount && y < batch)
+    {
+        float sum = 0;
+
+        // 矩阵乘法
+        for (int i = 0; i < inputCount; ++i)
+        {
+            float inputVal = inputBuffer[y * inputCount + i];
+            float weightVal = weightBuffer[i * outputCount + x];
+            sum += inputVal * weightVal;
+        }
+
+        // 将结果存储到输出缓冲区
+        outputBuffer[y * outputCount + x] = sum + biasBuffer[x];
+    }
+}
+
+// 反向传播
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void Backward(uint3 id : SV_DispatchThreadID)
+{
+    int y = id.y;
+    int x = id.x;
+    float sum = 0;
+
+    // 计算输入梯度
+    if (x < inputCount && y < batch)
+    {
+        for (int i = 0; i < outputCount; ++i)
+        {
+            float dout = dOutputBuffer[y * outputCount + i];
+            float weightVal = weightBuffer[x * outputCount + i];
+            sum += dout * weightVal;
+        }
+        dInputBuffer[y * inputCount + x] = sum;
+    }
+}
+
+// 梯度计算
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void ComputeGrads(uint3 id : SV_DispatchThreadID)
+{
+    int x = id.x;
+    int y = id.y;
+
+    float sumWeight = 0, sumBias = 0;
+
+    // 计算权重梯度
+    if (x < inputCount && y < outputCount)
+    {
+        for (int i = 0; i < batch; ++i)
+        {
+            float dout = dOutputBuffer[i * outputCount + y];
+            if (x == 0)
+            {
+                sumBias += dout;
+            }
+            float inputVal = inputBuffer[i * inputCount + x];
+            sumWeight += dout * inputVal;
+        }
+        dWeightBuffer[x * outputCount + y] = sumWeight * batchInv;
+
+        // 计算偏置梯度
+        if (x == 0)
+        {
+            dBiasBuffer[y] = sumBias * batchInv;
+        }
+    }
+}

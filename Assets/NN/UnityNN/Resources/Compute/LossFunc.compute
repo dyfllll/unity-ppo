@@ -1,0 +1,107 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel ForwardCrossEntropy
+#pragma kernel BackwardCrossEntropy
+
+#pragma kernel ForwardMSE
+#pragma kernel BackwardMSE
+
+// 定义线程组大小
+#define THREAD_GROUP_SIZE_X 8
+#define THREAD_GROUP_SIZE_Y 8
+#define THREAD_GROUP_SIZE 64
+
+uint inputCount; // 输入神经元个数
+uint batch; // 输入批数
+
+
+StructuredBuffer<float> inputBuffer;
+StructuredBuffer<float> targetBuffer;
+RWStructuredBuffer<float> lossBuffer;
+RWStructuredBuffer<float> outputBuffer;
+RWStructuredBuffer<float> dInputBuffer;
+
+
+// 计算交叉熵损失 
+[numthreads(1, THREAD_GROUP_SIZE, 1)]
+void ForwardCrossEntropy(uint3 id : SV_DispatchThreadID)
+{
+    uint y = id.y;
+    if (y < batch)
+    {
+        float loss = 0.0;
+        for (uint i = 0; i < inputCount; ++i)
+        {
+            uint idx = y * inputCount + i;
+            float targetVal = targetBuffer[idx];
+            float outputVal = outputBuffer[idx];
+            loss -= targetVal * log(outputVal + 1e-7); // 增加一个很小的数防止log(0)
+        }
+        lossBuffer[y] = loss;
+    }
+}
+
+
+// 反向传播 softmax+crossEntropy 
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void BackwardCrossEntropy(uint3 id : SV_DispatchThreadID)
+{
+    uint y = id.y;
+    uint x = id.x;
+
+    if (x < inputCount && y < batch)
+    {
+        uint index = y * inputCount + x;
+        //这里softmax+crossEntropy 两项反向传播合并在一起了
+        dInputBuffer[index] = (outputBuffer[index] - targetBuffer[index]);
+    }
+}
+
+//// 反向传播
+//[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+//void BackwardCrossEntropy(uint3 id : SV_DispatchThreadID)
+//{
+//    uint y = id.y;
+//    uint x = id.x;
+
+//    if (x < inputCount && y < batch)
+//    {
+//        uint index = y * inputCount + x;
+//        dInputBuffer[index] = -(targetBuffer[index] / max(outputBuffer[index], 0.0001));
+//    }
+//}
+
+
+
+// 计算均方差损失
+[numthreads(1, THREAD_GROUP_SIZE, 1)]
+void ForwardMSE(uint3 id : SV_DispatchThreadID)
+{
+    uint y = id.y;
+    if (y < batch)
+    {
+        float loss = 0.0;
+        for (uint i = 0; i < inputCount; ++i)
+        {
+            uint idx = y * inputCount + i;
+            float targetVal = targetBuffer[idx];
+            float outputVal = outputBuffer[idx];
+            float diff = targetVal - outputVal;
+            loss += diff * diff;
+        }
+        lossBuffer[y] = 2.0 * loss / inputCount;
+    }
+}
+
+
+// 反向传播
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void BackwardMSE(uint3 id : SV_DispatchThreadID)
+{
+    uint y = id.y;
+    uint x = id.x;
+    if (x < inputCount && y < batch)
+    {
+        uint index = y * inputCount + x;
+        dInputBuffer[index] = (outputBuffer[index] - targetBuffer[index]);
+    }
+}

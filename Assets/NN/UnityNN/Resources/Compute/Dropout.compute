@@ -1,0 +1,62 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel Forward
+#pragma kernel Backward
+#pragma kernel ForwardTrain Forward=ForwardTrain NN_TRAIN
+
+
+
+// 定义线程组大小
+#define THREAD_GROUP_SIZE_X 8
+#define THREAD_GROUP_SIZE_Y 8
+#define THREAD_GROUP_SIZE 64
+
+StructuredBuffer<float> inputBuffer;
+StructuredBuffer<float> dOutputBuffer;
+RWStructuredBuffer<float> outputBuffer;
+RWStructuredBuffer<float> dInputBuffer;
+
+StructuredBuffer<float> dMaskBuffer;
+RWStructuredBuffer<float> maskBuffer;
+
+// 矩阵维度
+uint inputCount;
+uint batch;
+
+float time;
+float dropoutRatio;
+
+//返回值在0到1
+float random(uint seed)
+{
+    seed = (seed << 13) ^ seed;
+    return 0.5 * ((seed * (seed * seed * 15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0;
+}
+
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void Forward(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < batch)
+    {
+        uint index = id.y * inputCount + id.x;
+        
+#if NN_TRAIN
+        float mask = random(index + time) > dropoutRatio;
+        maskBuffer[index] = mask;
+        outputBuffer[index] = inputBuffer[index] * mask;
+#else
+        outputBuffer[index] = inputBuffer[index] * (1 - dropoutRatio);
+#endif        
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void Backward(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < batch)
+    {
+        uint index = id.y * inputCount + id.x;
+        dInputBuffer[index] = dOutputBuffer[index] * maskBuffer[index];
+    }
+}
+

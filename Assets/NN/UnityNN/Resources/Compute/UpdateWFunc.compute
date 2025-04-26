@@ -1,0 +1,139 @@
+//#pragma enable_d3d11_debug_symbols
+#pragma kernel UpdateSGD
+#pragma kernel UpdateMomentum
+#pragma kernel UpdateNesterov
+#pragma kernel UpdateAdaGrad
+#pragma kernel UpdateRMSprop
+#pragma kernel UpdateAdam
+
+// 定义线程组大小
+#define THREAD_GROUP_SIZE_X 8
+#define THREAD_GROUP_SIZE_Y 8
+#define THREAD_GROUP_SIZE 64
+
+StructuredBuffer<float> gradsBuffer; //梯度 
+RWStructuredBuffer<float> gradsMBuffer;
+RWStructuredBuffer<float> gradsVBuffer;
+RWStructuredBuffer<float> updatedBuffer; //更新后的权重
+
+
+float learningRate; //学习率
+float learningRate_t;
+float beta1; //0.9f
+float beta2; //0.999f
+float minDelta;
+float curEpochs;
+
+// 矩阵维度
+uint inputCount;
+uint outputCount;
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateSGD(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        updatedBuffer[index] -= learningRate * gradsBuffer[index];
+    }
+}
+
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateMomentum(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        float gradient = gradsBuffer[index];
+                
+        float nm = beta1 * gradsMBuffer[index] - learningRate * gradient;
+
+        updatedBuffer[index] += nm;
+        
+        gradsMBuffer[index] = nm;
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateNesterov(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        float gradient = gradsBuffer[index];
+        
+        float nm = gradsMBuffer[index] * beta1; 
+        nm -= learningRate * gradient;
+        updatedBuffer[index] += beta1 * beta1 * nm;
+        updatedBuffer[index] -= (1 + beta1) * learningRate * gradient;
+        gradsMBuffer[index] = nm;
+    }
+}
+
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateAdaGrad(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        float gradient = gradsBuffer[index];
+        
+        float nv = gradsVBuffer[index] + gradient * gradient;
+        updatedBuffer[index] -= learningRate * gradient / (sqrt(nv) + minDelta);
+        gradsVBuffer[index] = nv;
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateRMSprop(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        float gradient = gradsBuffer[index];
+        
+        float nm = gradsMBuffer[index] * beta1; //beta1 = 0.99
+        nm += (1.0 - beta1) * gradient * gradient;
+  
+        updatedBuffer[index] -= learningRate * gradient / (sqrt(nm) + minDelta);
+        gradsMBuffer[index] = nm;
+    }
+}
+
+
+[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
+void UpdateAdam(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < inputCount && id.y < outputCount)
+    {
+        uint index = id.x * outputCount + id.y;
+        float gradient = gradsBuffer[index];
+        
+        // 实现0
+        //float nm = beta1 * gradsMBuffer[index] + (1 - beta1) * gradient;
+        //float nv = beta2 * gradsVBuffer[index] + (1 - beta2) * gradient * gradient;
+        
+        //float mHat = nm / (1 - pow(beta1, curEpochs));
+        //float vHat = nv / (1 - pow(beta2, curEpochs));
+        
+        //updatedBuffer[index] -= learningRate * mHat / (sqrt(vHat) + minDelta);
+        
+        //gradsMBuffer[index] = nm;
+        //gradsVBuffer[index] = nv;
+        
+        
+        //实现1
+        //float lr_t = learningRate * sqrt(1.0 - pow(beta2, curEpochs)) / (1.0 - pow(beta1, curEpochs));
+        float lr_t = learningRate_t;
+        
+        float nm = gradsMBuffer[index] + (1.0 - beta1) * (gradient - gradsMBuffer[index]);
+        float nv = gradsVBuffer[index] + (1.0 - beta2) * (gradient * gradient - gradsVBuffer[index]);
+     
+        updatedBuffer[index] -= lr_t * nm / (sqrt(nv) + minDelta);
+      
+        gradsMBuffer[index] = nm;
+        gradsVBuffer[index] = nv;
+    }
+}
